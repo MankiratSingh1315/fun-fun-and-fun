@@ -410,16 +410,13 @@ async fn send_sol(req_body: web::Json<SendSolRequest>) -> web::Json<serde_json::
         lamports,
     );
     
-    let mut accounts_obj = serde_json::Map::new();
-    for (i, acc) in instruction.accounts.iter().enumerate() {
-        let account_info = serde_json::json!({
+    let accounts: Vec<serde_json::Value> = instruction.accounts.iter().map(|acc| {
+        serde_json::json!({
             "pubkey": acc.pubkey.to_string(),
             "is_signer": acc.is_signer,
             "is_writable": acc.is_writable
-        });
-        accounts_obj.insert(format!("account_{}", i), account_info);
-    }
-    let accounts = serde_json::Value::Object(accounts_obj);
+        })
+    }).collect();
     
     let instruction_data = general_purpose::STANDARD.encode(&instruction.data);
     
