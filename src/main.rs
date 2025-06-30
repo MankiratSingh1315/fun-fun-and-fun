@@ -364,9 +364,9 @@ struct SendSolRequest {
 
 #[derive(Deserialize)]
 struct SendTokenRequest {
-    source: String,      // Source token account address
-    destination: String, // Destination token account address  
-    owner: String,       // Owner of the source token account
+    destination: String, // Destination user address
+    mint: String,        // Mint address
+    owner: String,       // Owner address
     amount: u64,
 }
 
@@ -442,7 +442,7 @@ async fn send_sol(req_body: web::Json<SendSolRequest>) -> web::Json<serde_json::
 #[post("/send/token")]
 async fn send_token(req_body: web::Json<SendTokenRequest>) -> web::Json<serde_json::Value> {
     // Check for missing fields and validate inputs
-    if req_body.source.is_empty() || req_body.destination.is_empty() || req_body.owner.is_empty() {
+    if req_body.destination.is_empty() || req_body.mint.is_empty() || req_body.owner.is_empty() {
         return web::Json(serde_json::to_value(ErrorResponse {
             success: false,
             error: "Missing required fields".to_string(),
@@ -457,22 +457,22 @@ async fn send_token(req_body: web::Json<SendTokenRequest>) -> web::Json<serde_js
         }).unwrap());
     }
     
-    let source = match Pubkey::from_str(&req_body.source) {
-        Ok(pk) => pk,
-        Err(_) => {
-            return web::Json(serde_json::to_value(ErrorResponse {
-                success: false,
-                error: "Invalid source token account public key".to_string(),
-            }).unwrap());
-        }
-    };
-    
     let destination = match Pubkey::from_str(&req_body.destination) {
         Ok(pk) => pk,
         Err(_) => {
             return web::Json(serde_json::to_value(ErrorResponse {
                 success: false,
-                error: "Invalid destination token account public key".to_string(),
+                error: "Invalid destination user address".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let mint = match Pubkey::from_str(&req_body.mint) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid mint address".to_string(),
             }).unwrap());
         }
     };
@@ -482,43 +482,45 @@ async fn send_token(req_body: web::Json<SendTokenRequest>) -> web::Json<serde_js
         Err(_) => {
             return web::Json(serde_json::to_value(ErrorResponse {
                 success: false,
-                error: "Invalid owner public key".to_string(),
+                error: "Invalid owner address".to_string(),
             }).unwrap());
         }
     };
     
     let amount = req_body.amount;
     
+    // Use token_transfer for transferring tokens between accounts
     let instruction = token_transfer(
         &TOKEN_PROGRAM_ID,
-        &source,
-        &destination,
-        &owner,
-        &[],
+        &mint,         // source token account
+        &destination,  // destination token account
+        &owner,        // owner of source account
+        &[],           // multisig signers
         amount,
     ).unwrap();
     
-    let mut accounts_obj = serde_json::Map::new();
-    for (i, acc) in instruction.accounts.iter().enumerate() {
+    // Convert accounts to array format with camelCase
+    let mut accounts_array = Vec::new();
+    for acc in instruction.accounts.iter() {
         let account_info = serde_json::json!({
             "pubkey": acc.pubkey.to_string(),
-            "is_signer": acc.is_signer,
-            "is_writable": acc.is_writable
+            "isSigner": acc.is_signer
         });
-        accounts_obj.insert(format!("account_{}", i), account_info);
+        accounts_array.push(account_info);
     }
-    let accounts = serde_json::Value::Object(accounts_obj);
     
     let instruction_data = general_purpose::STANDARD.encode(&instruction.data);
     
-    web::Json(serde_json::to_value(TokenApiResponse {
-        success: true,
-        data: TokenInstructionData {
-            program_id: instruction.program_id.to_string(),
-            accounts,
-            instruction_data,
-        },
-    }).unwrap())
+    let response = serde_json::json!({
+        "success": true,
+        "data": {
+            "program_id": instruction.program_id.to_string(),
+            "accounts": accounts_array,
+            "instruction_data": instruction_data
+        }
+    });
+    
+    web::Json(response)
 }
 
 #[actix_web::main]
