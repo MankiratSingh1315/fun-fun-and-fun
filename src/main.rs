@@ -7,7 +7,7 @@ use solana_sdk::{
     system_instruction::transfer,
 };
 use spl_token::{
-    instruction::{initialize_mint, mint_to},
+    instruction::{initialize_mint, mint_to, transfer as token_transfer},
     ID as TOKEN_PROGRAM_ID,
 };
 use std::str::FromStr;
@@ -362,6 +362,14 @@ struct SendSolRequest {
     lamports: u64,
 }
 
+#[derive(Deserialize)]
+struct SendTokenRequest {
+    source: String,      // Source token account address
+    destination: String, // Destination token account address  
+    owner: String,       // Owner of the source token account
+    amount: u64,
+}
+
 #[post("/send/sol")]
 async fn send_sol(req_body: web::Json<SendSolRequest>) -> web::Json<serde_json::Value> {
     // Check for missing fields and validate inputs
@@ -431,6 +439,88 @@ async fn send_sol(req_body: web::Json<SendSolRequest>) -> web::Json<serde_json::
     }).unwrap())
 }
 
+#[post("/send/token")]
+async fn send_token(req_body: web::Json<SendTokenRequest>) -> web::Json<serde_json::Value> {
+    // Check for missing fields and validate inputs
+    if req_body.source.is_empty() || req_body.destination.is_empty() || req_body.owner.is_empty() {
+        return web::Json(serde_json::to_value(ErrorResponse {
+            success: false,
+            error: "Missing required fields".to_string(),
+        }).unwrap());
+    }
+    
+    // Validate amount (must be positive)
+    if req_body.amount == 0 {
+        return web::Json(serde_json::to_value(ErrorResponse {
+            success: false,
+            error: "Amount must be greater than 0".to_string(),
+        }).unwrap());
+    }
+    
+    let source = match Pubkey::from_str(&req_body.source) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid source token account public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let destination = match Pubkey::from_str(&req_body.destination) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid destination token account public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let owner = match Pubkey::from_str(&req_body.owner) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid owner public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let amount = req_body.amount;
+    
+    let instruction = token_transfer(
+        &TOKEN_PROGRAM_ID,
+        &source,
+        &destination,
+        &owner,
+        &[],
+        amount,
+    ).unwrap();
+    
+    let mut accounts_obj = serde_json::Map::new();
+    for (i, acc) in instruction.accounts.iter().enumerate() {
+        let account_info = serde_json::json!({
+            "pubkey": acc.pubkey.to_string(),
+            "is_signer": acc.is_signer,
+            "is_writable": acc.is_writable
+        });
+        accounts_obj.insert(format!("account_{}", i), account_info);
+    }
+    let accounts = serde_json::Value::Object(accounts_obj);
+    
+    let instruction_data = general_purpose::STANDARD.encode(&instruction.data);
+    
+    web::Json(serde_json::to_value(TokenApiResponse {
+        success: true,
+        data: TokenInstructionData {
+            program_id: instruction.program_id.to_string(),
+            accounts,
+            instruction_data,
+        },
+    }).unwrap())
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
@@ -445,6 +535,7 @@ async fn main() -> std::io::Result<()> {
             .service(sign_message)
             .service(verify_message)
             .service(send_sol)
+            .service(send_token)
     })
     .bind(("127.0.0.1", 8080))?
     .run()
