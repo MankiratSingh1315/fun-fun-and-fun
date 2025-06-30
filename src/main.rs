@@ -6,7 +6,7 @@ use solana_sdk::{
     signer::{keypair::Keypair, Signer},
 };
 use spl_token::{
-    instruction::initialize_mint,
+    instruction::{initialize_mint, mint_to},
     ID as TOKEN_PROGRAM_ID,
 };
 use std::str::FromStr;
@@ -121,6 +121,80 @@ async fn create_token(req_body: web::Json<CreateTokenRequest>) -> web::Json<serd
     }).unwrap())
 }
 
+#[derive(Deserialize)]
+struct MintTokenRequest {
+    mint: String,
+    destination: String,
+    authority: String,
+    amount: u64,
+}
+
+#[post("/token/mint")]
+async fn mint_token(req_body: web::Json<MintTokenRequest>) -> web::Json<serde_json::Value> {
+    let mint = match Pubkey::from_str(&req_body.mint) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid mint public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let destination = match Pubkey::from_str(&req_body.destination) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid destination public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let authority = match Pubkey::from_str(&req_body.authority) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid authority public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let amount = req_body.amount;
+    
+    let instruction = mint_to(
+        &TOKEN_PROGRAM_ID,
+        &mint,
+        &destination,
+        &authority,
+        &[],
+        amount,
+    ).unwrap();
+    
+    let mut accounts_obj = serde_json::Map::new();
+    for (i, acc) in instruction.accounts.iter().enumerate() {
+        let account_info = serde_json::json!({
+            "pubkey": acc.pubkey.to_string(),
+            "is_signer": acc.is_signer,
+            "is_writable": acc.is_writable
+        });
+        accounts_obj.insert(format!("account_{}", i), account_info);
+    }
+    let accounts = serde_json::Value::Object(accounts_obj);
+    
+    let instruction_data = general_purpose::STANDARD.encode(&instruction.data);
+    
+    web::Json(serde_json::to_value(TokenApiResponse {
+        success: true,
+        data: TokenInstructionData {
+            program_id: instruction.program_id.to_string(),
+            accounts,
+            instruction_data,
+        },
+    }).unwrap())
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
@@ -131,6 +205,7 @@ async fn main() -> std::io::Result<()> {
             .service(index)
             .service(hello)
             .service(create_token)
+            .service(mint_token)
     })
     .bind(("127.0.0.1", 8080))?
     .run()
