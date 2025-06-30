@@ -1,6 +1,15 @@
-use actix_web::{get, post, web, App, HttpServer, Responder};
-use serde::Serialize;
-use solana_sdk::signer::{keypair::Keypair, Signer};
+use actix_web::{get, post, web, App, HttpServer, Responder, middleware::Logger};
+use base64::{engine::general_purpose, Engine as _};
+use serde::{Deserialize, Serialize};
+use solana_sdk::{
+    pubkey::Pubkey,
+    signer::{keypair::Keypair, Signer},
+};
+use spl_token::{
+    instruction::initialize_mint,
+    ID as TOKEN_PROGRAM_ID,
+};
+use std::str::FromStr;
 
 #[get("/")]
 async fn index() -> impl Responder {
@@ -30,12 +39,100 @@ async fn hello() -> impl Responder {
     })
 }
 
+#[derive(Deserialize)]
+struct CreateTokenRequest {
+    #[serde(rename = "mintAuthority")]
+    mint_authority: String,
+    mint: String,
+    decimals: u8,
+}
 
+#[derive(Serialize)]
+struct TokenInstructionData {
+    program_id: String,
+    accounts: serde_json::Value, 
+    instruction_data: String,
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    success: bool,
+    error: String,
+}
+
+#[derive(Serialize)]
+struct TokenApiResponse {
+    success: bool,
+    data: TokenInstructionData,
+}
+
+#[post("/token/create")]
+async fn create_token(req_body: web::Json<CreateTokenRequest>) -> web::Json<serde_json::Value> {
+    let mint_authority = match Pubkey::from_str(&req_body.mint_authority) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid mintAuthority public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let mint = match Pubkey::from_str(&req_body.mint) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid mint public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let decimals = req_body.decimals;
+    
+    let instruction = initialize_mint(
+        &TOKEN_PROGRAM_ID,
+        &mint,
+        &mint_authority,
+        Some(&mint_authority), 
+        decimals,
+    ).unwrap();
+    
+    let mut accounts_obj = serde_json::Map::new();
+    for (i, acc) in instruction.accounts.iter().enumerate() {
+        let account_info = serde_json::json!({
+            "pubkey": acc.pubkey.to_string(),
+            "is_signer": acc.is_signer,
+            "is_writable": acc.is_writable
+        });
+        accounts_obj.insert(format!("account_{}", i), account_info);
+    }
+    let accounts = serde_json::Value::Object(accounts_obj);
+    
+    let instruction_data = general_purpose::STANDARD.encode(&instruction.data);
+    
+    web::Json(serde_json::to_value(TokenApiResponse {
+        success: true,
+        data: TokenInstructionData {
+            program_id: instruction.program_id.to_string(),
+            accounts,
+            instruction_data,
+        },
+    }).unwrap())
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| App::new().service(index).service(hello))
-        .bind(("127.0.0.1", 8080))?
-        .run()
-        .await
+    env_logger::init();
+    
+    HttpServer::new(|| {
+        App::new()
+            .wrap(Logger::default())
+            .service(index)
+            .service(hello)
+            .service(create_token)
+    })
+    .bind(("127.0.0.1", 8080))?
+    .run()
+    .await
 }
