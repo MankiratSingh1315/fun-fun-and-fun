@@ -135,6 +135,13 @@ struct SignMessageRequest {
     secret: String,
 }
 
+#[derive(Deserialize)]
+struct VerifyMessageRequest {
+    message: String,
+    signature: String,
+    pubkey: String,
+}
+
 #[derive(Serialize)]
 struct SignMessageData {
     signature: String,
@@ -143,9 +150,22 @@ struct SignMessageData {
 }
 
 #[derive(Serialize)]
+struct VerifyMessageData {
+    valid: bool,
+    message: String,
+    pubkey: String,
+}
+
+#[derive(Serialize)]
 struct SignMessageResponse {
     success: bool,
     data: SignMessageData,
+}
+
+#[derive(Serialize)]
+struct VerifyMessageResponse {
+    success: bool,
+    data: VerifyMessageData,
 }
 
 #[post("/token/mint")]
@@ -266,6 +286,74 @@ async fn sign_message(req_body: web::Json<SignMessageRequest>) -> web::Json<serd
     }).unwrap())
 }
 
+#[post("/message/verify")]
+async fn verify_message(req_body: web::Json<VerifyMessageRequest>) -> web::Json<serde_json::Value> {
+    // Check for missing fields
+    if req_body.message.is_empty() || req_body.signature.is_empty() || req_body.pubkey.is_empty() {
+        return web::Json(serde_json::to_value(ErrorResponse {
+            success: false,
+            error: "Missing required fields".to_string(),
+        }).unwrap());
+    }
+    
+    // Decode the public key from base58
+    let pubkey_bytes = match bs58::decode(&req_body.pubkey).into_vec() {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid public key format".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    // Create pubkey from bytes
+    let pubkey = match Pubkey::try_from(pubkey_bytes.as_slice()) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    // Decode the signature from base64
+    let signature_bytes = match general_purpose::STANDARD.decode(&req_body.signature) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid signature format".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    // Create signature from bytes
+    let signature = match solana_sdk::signature::Signature::try_from(signature_bytes.as_slice()) {
+        Ok(sig) => sig,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid signature".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    // Verify the signature
+    let message_bytes = req_body.message.as_bytes();
+    let is_valid = signature.verify(pubkey.as_ref(), message_bytes);
+    
+    web::Json(serde_json::to_value(VerifyMessageResponse {
+        success: true,
+        data: VerifyMessageData {
+            valid: is_valid,
+            message: req_body.message.clone(),
+            pubkey: req_body.pubkey.clone(),
+        },
+    }).unwrap())
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
@@ -278,6 +366,7 @@ async fn main() -> std::io::Result<()> {
             .service(create_token)
             .service(mint_token)
             .service(sign_message)
+            .service(verify_message)
     })
     .bind(("127.0.0.1", 8080))?
     .run()
