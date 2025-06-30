@@ -1,14 +1,36 @@
-use actix_web::{get, web, App, HttpServer, Responder};
+use actix_web::{get, post, web, App, HttpServer, Responder};
+use serde::Serialize;
+use solana_sdk::signer::{keypair::Keypair, Signer};
 
 #[get("/")]
 async fn index() -> impl Responder {
     "Hello, World!"
 }
-
-#[get("/{name}")]
-async fn hello(name: web::Path<String>) -> impl Responder {
-    format!("Hello {}!", &name)
+#[derive(Serialize)]
+struct KeypairData {
+    pubkey: String,
+    secret: String,
 }
+
+#[derive(Serialize)]
+struct ApiResponse {
+    success: bool,
+    data: KeypairData,
+}
+
+#[post("/keypair")]
+async fn hello() -> impl Responder {
+    let keypair = Keypair::new();
+    let pubkey = keypair.pubkey().to_string();
+    let secret = bs58::encode(keypair.to_bytes()).into_string();
+
+    web::Json(ApiResponse {
+        success: true,
+        data: KeypairData { pubkey, secret },
+    })
+}
+
+
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
