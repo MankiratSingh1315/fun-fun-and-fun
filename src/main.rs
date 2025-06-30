@@ -51,7 +51,7 @@ struct CreateTokenRequest {
 #[derive(Serialize)]
 struct TokenInstructionData {
     program_id: String,
-    accounts: serde_json::Value, 
+    accounts: Vec<serde_json::Value>, 
     instruction_data: String,
 }
 
@@ -99,16 +99,13 @@ async fn create_token(req_body: web::Json<CreateTokenRequest>) -> web::Json<serd
         decimals,
     ).unwrap();
     
-    let mut accounts_obj = serde_json::Map::new();
-    for (i, acc) in instruction.accounts.iter().enumerate() {
-        let account_info = serde_json::json!({
+    let accounts: Vec<serde_json::Value> = instruction.accounts.iter().map(|acc| {
+        serde_json::json!({
             "pubkey": acc.pubkey.to_string(),
             "is_signer": acc.is_signer,
             "is_writable": acc.is_writable
-        });
-        accounts_obj.insert(format!("account_{}", i), account_info);
-    }
-    let accounts = serde_json::Value::Object(accounts_obj);
+        })
+    }).collect();
     
     let instruction_data = general_purpose::STANDARD.encode(&instruction.data);
     
@@ -212,16 +209,13 @@ async fn mint_token(req_body: web::Json<MintTokenRequest>) -> web::Json<serde_js
         amount,
     ).unwrap();
     
-    let mut accounts_obj = serde_json::Map::new();
-    for (i, acc) in instruction.accounts.iter().enumerate() {
-        let account_info = serde_json::json!({
+    let accounts: Vec<serde_json::Value> = instruction.accounts.iter().map(|acc| {
+        serde_json::json!({
             "pubkey": acc.pubkey.to_string(),
             "is_signer": acc.is_signer,
             "is_writable": acc.is_writable
-        });
-        accounts_obj.insert(format!("account_{}", i), account_info);
-    }
-    let accounts = serde_json::Value::Object(accounts_obj);
+        })
+    }).collect();
     
     let instruction_data = general_purpose::STANDARD.encode(&instruction.data);
     
