@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use solana_sdk::{
     pubkey::Pubkey,
     signer::{keypair::Keypair, Signer},
+    system_instruction::transfer,
 };
 use spl_token::{
     instruction::{initialize_mint, mint_to},
@@ -354,6 +355,82 @@ async fn verify_message(req_body: web::Json<VerifyMessageRequest>) -> web::Json<
     }).unwrap())
 }
 
+#[derive(Deserialize)]
+struct SendSolRequest {
+    from: String,
+    to: String,
+    lamports: u64,
+}
+
+#[post("/send/sol")]
+async fn send_sol(req_body: web::Json<SendSolRequest>) -> web::Json<serde_json::Value> {
+    // Check for missing fields and validate inputs
+    if req_body.from.is_empty() || req_body.to.is_empty() {
+        return web::Json(serde_json::to_value(ErrorResponse {
+            success: false,
+            error: "Missing required fields".to_string(),
+        }).unwrap());
+    }
+    
+    // Validate lamports amount (must be positive)
+    if req_body.lamports == 0 {
+        return web::Json(serde_json::to_value(ErrorResponse {
+            success: false,
+            error: "Lamports amount must be greater than 0".to_string(),
+        }).unwrap());
+    }
+    
+    let from = match Pubkey::from_str(&req_body.from) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid from public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let to = match Pubkey::from_str(&req_body.to) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return web::Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                error: "Invalid to public key".to_string(),
+            }).unwrap());
+        }
+    };
+    
+    let lamports = req_body.lamports;
+    
+    let instruction = transfer(
+        &from,
+        &to,
+        lamports,
+    );
+    
+    let mut accounts_obj = serde_json::Map::new();
+    for (i, acc) in instruction.accounts.iter().enumerate() {
+        let account_info = serde_json::json!({
+            "pubkey": acc.pubkey.to_string(),
+            "is_signer": acc.is_signer,
+            "is_writable": acc.is_writable
+        });
+        accounts_obj.insert(format!("account_{}", i), account_info);
+    }
+    let accounts = serde_json::Value::Object(accounts_obj);
+    
+    let instruction_data = general_purpose::STANDARD.encode(&instruction.data);
+    
+    web::Json(serde_json::to_value(TokenApiResponse {
+        success: true,
+        data: TokenInstructionData {
+            program_id: instruction.program_id.to_string(),
+            accounts,
+            instruction_data,
+        },
+    }).unwrap())
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
@@ -367,6 +444,7 @@ async fn main() -> std::io::Result<()> {
             .service(mint_token)
             .service(sign_message)
             .service(verify_message)
+            .service(send_sol)
     })
     .bind(("127.0.0.1", 8080))?
     .run()
